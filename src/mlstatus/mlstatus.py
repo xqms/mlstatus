@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 
 import argparse
+import fcntl
 import math
 import os
 import pty
 import selectors
+import shutil
 import signal
 import subprocess
 import sys
+import struct
+import termios
 import time
 from typing import Optional
 
@@ -218,7 +222,21 @@ def main():
     stdout_master, stdout_slave = pty.openpty()
     stderr_master, stderr_slave = pty.openpty()
 
+    def update_window_size(*args):
+        # Get our window size
+        columns, rows = shutil.get_terminal_size()
+
+        # Set window size on the PTYs
+        TIOCSWINSZ = getattr(termios, 'TIOCSWINSZ', -2146929561)
+        # Note, assume ws_xpixel and ws_ypixel are zero.
+        s = struct.pack('HHHH', rows, columns, 0, 0)
+        fcntl.ioctl(stdout_master, TIOCSWINSZ, s)
+        fcntl.ioctl(stderr_master, TIOCSWINSZ, s)
+
+    update_window_size()
+
     signal.signal(signal.SIGINT, sigint_handler)
+    signal.signal(signal.SIGWINCH, update_window_size)
 
     proc = subprocess.Popen(
         command, stdout=stdout_slave, stderr=stderr_slave, encoding="utf8"
