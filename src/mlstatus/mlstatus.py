@@ -1,10 +1,13 @@
+#!/usr/bin/env python3
+
+import argparse
+import math
+import os
+import pty
+import selectors
+import signal
 import subprocess
 import sys
-import selectors
-import math
-import pty
-import os
-import signal
 import time
 from typing import Optional
 
@@ -173,11 +176,40 @@ class Device:
         power = self.nvml.getPowerUsage()
         self.power = self.alpha * power + (1.0 - self.alpha) * self.power
 
-    def status(self):
-        return f"[ {self.name}  ⚙  {self.util:3.0f}%  🛢  {self.used:4.1f}/{self.free:.0f} GiB ({self.used / self.free * 100:3.0f}%)  🌡 {self.temp:3}°C  🔌 {self.power / 1000:3.0f}W ]"
+    def status(self, ic):
+        fields = [
+            f"{self.name}",
+            f"⚙{self.util:3.0f}%",
+            f"🛢{self.used:4.1f}/{self.free:.0f} GiB ({self.used / self.free * 100:3.0f}%)",
+            f"🌡{self.temp:3}°C",
+            f"🔌{self.power / 1000:3.0f}W",
+        ]
+
+        return f"[ {'  '.join([f'{ic[0]}{f}{ic[1]}' for f in fields])} ]"
 
 
-if __name__ == "__main__":
+stop_requested = False
+
+
+def sigint_handler(_, _2):
+    global stop_requested
+
+    if stop_requested:
+        sys.exit(1)
+
+    stop_requested = True
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--prefix", metavar="PREFIX", help="Display PREFIX in front of the status bar"
+    )
+    parser.add_argument('command', nargs='*')
+
+    args, command = parser.parse_known_args()
+    command = args.command + command
+
     nvml = NVML()
 
     num_devices = nvml.deviceGetCount()
@@ -186,20 +218,10 @@ if __name__ == "__main__":
     stdout_master, stdout_slave = pty.openpty()
     stderr_master, stderr_slave = pty.openpty()
 
-    stop_requested = False
-
-    def sigint_handler(_, _2):
-        global stop_requested
-
-        if stop_requested:
-            sys.exit(1)
-
-        stop_requested = True
-
     signal.signal(signal.SIGINT, sigint_handler)
 
     proc = subprocess.Popen(
-        sys.argv[1:], stdout=stdout_slave, stderr=stderr_slave, encoding="utf8"
+        command, stdout=stdout_slave, stderr=stderr_slave, encoding="utf8"
     )
 
     os.close(stdout_slave)
@@ -208,24 +230,26 @@ if __name__ == "__main__":
     sys.stdout.write("\n")
 
     stat_timer = TimerFD(time.CLOCK_MONOTONIC)
-    stat_timer.settime(0.5, 0.1)
+    stat_timer.settime(UPDATE_PERIOD, 0.1)
 
     start_time = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
 
     running = True
 
     def status_line():
-        global start_time
-
         current_time = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
 
         elapsed = (current_time - start_time) // 1000000000
         elapsed_hours, elapsed = divmod(elapsed, 60 * 60)
         elapsed_minutes, elapsed_seconds = divmod(elapsed, 60)
 
+        ic = ("\033[48;5;18m", "\033[48;5;17m")
+
+        prefix = f"{ic[0]}{args.prefix}{ic[1]} " if args.prefix else ''
+
         return (
-            f"\033[48;5;17m {elapsed_hours:3}:{elapsed_minutes:02}:{elapsed_seconds:02} │ "
-            + ", ".join([dev.status() for dev in devices])
+            f"{ic[1]} {prefix}{ic[0]}🕑{elapsed_hours}:{elapsed_minutes:02}:{elapsed_seconds:02}\033{ic[1]} │ "
+            + ", ".join([dev.status(ic) for dev in devices])
             + " \033[K\033[0m"
         )
 
@@ -263,17 +287,17 @@ if __name__ == "__main__":
         return True
 
     selector = selectors.DefaultSelector()
-    key_stdout = selector.register(
+    selector.register(
         stdout_master,
         selectors.EVENT_READ,
         data=lambda: handle_output(stdout_master, sys.stdout),
     )
-    key_stderr = selector.register(
+    selector.register(
         stderr_master,
         selectors.EVENT_READ,
         data=lambda: handle_output(stderr_master, sys.stderr),
     )
-    key_stats = selector.register(
+    selector.register(
         stat_timer, selectors.EVENT_READ, data=lambda: refresh_status(stat_timer)
     )
 
@@ -293,3 +317,7 @@ if __name__ == "__main__":
     print()
 
     sys.exit(proc.wait())
+
+
+if __name__ == "__main__":
+    main()
