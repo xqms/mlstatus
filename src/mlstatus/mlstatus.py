@@ -8,6 +8,7 @@ import pty
 import selectors
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import struct
@@ -252,6 +253,8 @@ def main():
 
     start_time = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
 
+    hostname = socket.gethostname()
+
     running = True
 
     def status_line():
@@ -263,10 +266,21 @@ def main():
 
         ic = ("\033[48;5;18m", "\033[48;5;17m")
 
-        prefix = f"{ic[0]}{args.prefix}{ic[1]} " if args.prefix else ''
+        fields = []
+
+        if args.prefix:
+            fields += [args.prefix]
+
+        fields += [
+            f"🕑{elapsed_hours}:{elapsed_minutes:02}:{elapsed_seconds:02}",
+            f"💻{hostname}",
+        ]
+
+        if 'SLURM_JOB_ID' in os.environ:
+            fields += [f"🌐Job {os.environ['SLURM_JOB_ID']}"]
 
         return (
-            f"{ic[1]} {prefix}{ic[0]}🕑{elapsed_hours}:{elapsed_minutes:02}:{elapsed_seconds:02}\033{ic[1]} │ "
+            f"{ic[1]} {'  '.join([f'{ic[0]}{f}{ic[1]}' for f in fields])} │ "
             + ", ".join([dev.status(ic) for dev in devices])
             + " \033[K\033[0m"
         )
